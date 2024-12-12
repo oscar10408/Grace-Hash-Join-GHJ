@@ -18,6 +18,85 @@ The provided starter files form the backbone of the project and include essentia
 
 ### Partition Phase
 The `partition()` function divides the records from the left and right relations into partitions based on a hash of their keys. These partitions are stored in buckets, which are further organized by disk page IDs.
+```cpp
+/*
+ * Input: Disk, Memory, Disk page ids for left relation, Disk page ids for right relation
+ * Output: Vector of Buckets of size (MEM_SIZE_IN_PAGE - 1) after partition
+ */
+
+
+vector<Bucket> partition(Disk* disk, Mem* mem, pair<uint, uint> left_rel,
+                         pair<uint, uint> right_rel) {
+    // Step 1: Initialize the vector of Buckets
+    vector<Bucket> partitions(MEM_SIZE_IN_PAGE - 1, Bucket(disk));
+    
+    // Step 2: Partition the left relation
+    for (uint page_id = left_rel.first; page_id < left_rel.second; ++page_id) {
+        // Load page from disk into memory at memory page 0
+		// Memory page 0 is the input page, that is why B-1
+        mem->mem_page(0)->reset();
+        mem->loadFromDisk(disk, page_id, 0);
+        Page* mem_page = mem->mem_page(0);
+
+        // Process each record in the page
+        for (uint i = 0; i < mem_page->size(); ++i) {
+            Record record = mem_page->get_record(i);
+            uint partition_index = record.partition_hash() % (MEM_SIZE_IN_PAGE - 1);
+			
+			// Add the record to the corresponding page in mem
+			mem->mem_page(partition_index + 1)->loadRecord(record);
+
+			// Check if the page is full, if so, flush it to disk and add new_page_id to bucket
+			if (mem->mem_page(partition_index + 1)->full()) {
+				uint new_page_id =  mem->flushToDisk(disk, partition_index + 1);
+				partitions[partition_index].add_left_rel_page(new_page_id);
+			}
+        }
+    }
+
+    // Flush the remaining records in the memory page to disk
+	for (uint i = 0; i < partitions.size(); ++i) {
+		if (!mem->mem_page(i + 1)->empty()) {
+			uint new_page_id =  mem->flushToDisk(disk, i + 1);
+			partitions[i].add_left_rel_page(new_page_id);
+            mem->mem_page(i + 1)->reset();
+		}
+	}
+
+    // Step 3: Partition the right relation
+    for (uint page_id = right_rel.first; page_id < right_rel.second; ++page_id) {
+        // Load page from disk into memory at memory page 0
+        mem->mem_page(0)->reset();
+        mem->loadFromDisk(disk, page_id, 0);
+        Page* mem_page = mem->mem_page(0);
+
+        // Process each record in the page
+        for (uint i = 0; i < mem_page->size(); ++i) {
+            Record record = mem_page->get_record(i);
+            uint partition_index = record.partition_hash() % (MEM_SIZE_IN_PAGE - 1);
+			
+			// Add the record to the corresponding page in mem
+			mem->mem_page(partition_index + 1)->loadRecord(record);
+
+			// Check if the page is full, if so, flush it to disk and add new_page_id to bucket
+			if (mem->mem_page(partition_index + 1)->full()) {
+				uint new_page_id =  mem->flushToDisk(disk, partition_index + 1);
+				partitions[partition_index].add_right_rel_page(new_page_id);
+			}
+        }
+    }
+
+	// Flush the remaining records in the memory page to disk
+	for (uint i = 0; i < partitions.size(); ++i) {
+		if (!mem->mem_page(i + 1)->empty()) {
+			uint new_page_id =  mem->flushToDisk(disk, i + 1);
+			partitions[i].add_right_rel_page(new_page_id);
+            mem->mem_page(i + 1)->reset();
+		}
+	}
+    return partitions;
+}
+```
 
 ### Probe Phase
 The `probe()` function scans through the partitions and attempts to find matching records between the left and right relations based on the hash values. It then produces the final join result, which consists of the relevant disk page IDs.

@@ -100,6 +100,96 @@ vector<Bucket> partition(Disk* disk, Mem* mem, pair<uint, uint> left_rel,
 
 ### Probe Phase
 The `probe()` function scans through the partitions and attempts to find matching records between the left and right relations based on the hash values. It then produces the final join result, which consists of the relevant disk page IDs.
+```cpp
+/*
+ * Input: Disk, Memory, Vector of Buckets after partition
+ * Output: Vector of disk page ids for join result
+ */
+vector<uint> probe(Disk* disk, Mem* mem, vector<Bucket>& partitions) {
+    vector<uint> disk_pages;
+
+    Page* output_page = mem->mem_page(1);
+
+    // Iterate through each bucket
+    for (Bucket& bucket : partitions) {
+        // Get left and right relation page IDs from the bucket
+        vector<uint> left_pages = bucket.get_left_rel();
+        vector<uint> right_pages = bucket.get_right_rel();
+        
+        if (left_pages.size() >= right_pages.size()){
+            left_pages = bucket.get_right_rel();
+            right_pages = bucket.get_left_rel();
+        }
+
+        for (uint i = 0; i < MEM_SIZE_IN_PAGE - 2; ++i) {
+            mem->mem_page(i + 2)->reset();
+        }
+
+        // Hash all left relation records into memory (B-2 buckets)
+        for (uint left_page_id : left_pages) {
+            mem->mem_page(0)->reset();
+            mem->loadFromDisk(disk, left_page_id, 0);  // Load left page into mem_page(0)
+            Page* left_page = mem->mem_page(0);
+
+            for (uint i = 0; i < left_page->size(); ++i) {
+                Record left_record = left_page->get_record(i);
+                uint hash_index = left_record.probe_hash() % (MEM_SIZE_IN_PAGE - 2);
+
+                // Add the record to the corresponding hashed page in memory
+                Page* hash_page = mem->mem_page(hash_index + 2);
+                hash_page->loadRecord(left_record);
+            }
+        }
+        
+        // Iterate through right relation and find matches
+
+        for (uint right_page_id : right_pages) {
+            mem->mem_page(0)->reset();
+            mem->loadFromDisk(disk, right_page_id, 0);  // Load right page into mem_page(0)
+            Page* right_page = mem->mem_page(0);
+
+            for (uint i = 0; i < right_page->size(); ++i) {
+                Record right_record = right_page->get_record(i);
+                uint hash_index = right_record.probe_hash() % (MEM_SIZE_IN_PAGE - 2);
+
+                // Compare with hashed records in the corresponding memory page
+                Page* hash_page = mem->mem_page(hash_index + 2);
+
+                for (uint j = 0; j < hash_page->size(); ++j) {
+                    Record left_record = hash_page->get_record(j);
+
+                    if (left_record == right_record) {
+                        // Flush output page to disk if full
+                        if (output_page->full()) {
+                            uint new_disk_page_id = mem->flushToDisk(disk, 1);
+                            disk_pages.push_back(new_disk_page_id);
+                            output_page->reset();
+                        }
+
+                        // If records match, add to output page (mem_page(1))
+                        output_page->loadPair(left_record, right_record);
+
+                    }
+                }
+            }
+        }
+    }
+    
+    // Flush any remaining records in the output page
+    if (!output_page->empty()) {
+        uint new_disk_page_id = mem->flushToDisk(disk, 1);
+        disk_pages.push_back(new_disk_page_id);
+        output_page->reset();
+    }
+
+    // Reset all hash pages in memory
+    for (uint i = 2; i < MEM_SIZE_IN_PAGE; ++i) {
+        mem->mem_page(i)->reset();
+    }
+    
+    return disk_pages;
+}
+```
 
 ## Constants
 The project uses the following constants defined in `constants.hpp`:
